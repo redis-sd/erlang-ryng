@@ -13,10 +13,6 @@
 
 -include("ryng.hrl").
 
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
-
 -define(SERVER, ?MODULE).
 -define(TAB, ?MODULE).
 -define(TAB_RINGS, ryng_rings).
@@ -410,56 +406,3 @@ require([App|Tail]) ->
 		{error, {already_started, App}} -> ok
 	end,
 	require(Tail).
-
-%%%-------------------------------------------------------------------
-%%% Internal functions
-%%%-------------------------------------------------------------------
-
--ifdef(TEST).
-
-% labels_keys_roundtrip_test_() ->
-% 	Specs = [
-% 		{
-% 			{<<"domain">>, <<"type">>, <<"service">>, <<"instance">>},
-% 			[
-% 				{ptr, <<"_service._type.domain">>},
-% 				{srv, <<"instance._service._type.domain">>},
-% 				{key, <<"domain._type._service.instance">>}
-% 			]
-% 		},
-% 		{
-% 			{<<"deeply.nested.domain.at.a.company.com">>, <<"tcp">>, <<"erlang">>, <<
-% 				206,190,206,181,207,131,206,186,206,181,207,128,206,172,206,
-% 				182,207,137,32,207,132,225,189,180,206,189,32,207,136,207,
-% 				133,207,135,206,191,207,134,206,184,207,140,207,129,206,
-% 				177,32,206,178,206,180,206,181,206,187,207,133,206,179,
-% 				206,188,206,175,206,177
-% 			>>}, %% <<"ξεσκεπάζω τὴν ψυχοφθόρα βδελυγμία"/utf8>>
-% 			[
-% 				{ptr, <<"_erlang._tcp.deeply.nested.domain.at.a.company.com">>},
-% 				{srv, <<
-% 					"%ce%be%ce%b5%cf%83%ce%ba%ce%b5%cf%80%ce%ac%ce%b6%cf"
-% 					"%89+%cf%84%e1%bd%b4%ce%bd+%cf%88%cf%85%cf%87%ce%bf"
-% 					"%cf%86%ce%b8%cf%8c%cf%81%ce%b1+%ce%b2%ce%b4%ce%b5"
-% 					"%ce%bb%cf%85%ce%b3%ce%bc%ce%af%ce%b1"
-% 					"._erlang._tcp.deeply.nested.domain.at.a.company.com"
-% 				>>},
-% 				{key, <<
-% 					"com.company.a.at.domain.nested.deeply._tcp._erlang."
-% 					"%ce%be%ce%b5%cf%83%ce%ba%ce%b5%cf%80%ce%ac%ce%b6%cf"
-% 					"%89+%cf%84%e1%bd%b4%ce%bd+%cf%88%cf%85%cf%87%ce%bf"
-% 					"%cf%86%ce%b8%cf%8c%cf%81%ce%b1+%ce%b2%ce%b4%ce%b5"
-% 					"%ce%bb%cf%85%ce%b3%ce%bc%ce%af%ce%b1"
-% 				>>}
-% 			]
-% 		}
-% 	],
-% 	[{lists:flatten(io_lib:format("roundtrip: ~p <=> ~p", [Labels, Keys])), fun() ->
-% 		[{ptr, PTR2}, {srv, SRV2}, {key, KEY2}] = labels_to_keys(Labels),
-% 		?assertEqual(PTR, PTR2),
-% 		?assertEqual(SRV, SRV2),
-% 		?assertEqual(KEY, KEY2),
-% 		?assertEqual(Labels, keys_to_labels(Keys))
-% 	end} || {Labels, Keys=[{ptr, PTR}, {srv, SRV}, {key, KEY}]} <- Specs].
-
--endif.
