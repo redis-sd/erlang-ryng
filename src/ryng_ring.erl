@@ -15,7 +15,7 @@
 
 %% API
 -export([start_link/1, graceful_shutdown/1]).
--export([list_nodes/1, add_node/3, del_node/2, is_node/2]).
+-export([list_nodes/1, add_node/4, del_node/2, is_node/2]).
 -export([hash_for/2, index_for/2, key_for/2, key_of/1, node_for/2]).
 
 %% gen_server callbacks
@@ -50,10 +50,12 @@ list_nodes(RingName) ->
 			{ok, ring_not_found}
 	end.
 
-add_node(RingName, NodeObject, NodeWeight) ->
+add_node(RingName, NodeObject, NodeWeight, NodePriority)
+		when is_integer(NodeWeight) andalso NodeWeight >= 0
+		andalso is_integer(NodePriority) andalso NodePriority >= 0 ->
 	case ryng:is_ring(RingName) of
 		true ->
-			gen_server:call(RingName, {add_node, NodeObject, NodeWeight});
+			gen_server:call(RingName, {add_node, NodeObject, NodeWeight, NodePriority});
 		false ->
 			{error, ring_not_found}
 	end.
@@ -84,17 +86,20 @@ hash_for(RingName, Binary) when is_binary(Binary) ->
 
 index_for(RingName, Binary) when is_binary(Binary) ->
 	case ryng:get_ring(RingName) of
-		{ok, #ring{size=0}} ->
-			{error, ring_empty};
-		{ok, #ring{hasher=Hasher, inc=Inc, size=Size}} ->
-			Hash = Hasher(Binary),
-			IntegerKey = case Hash of
-				_ when is_binary(Hash) ->
-					ryng:bin_to_int(Hash);
-				_ ->
-					Hash
-			end,
-			{ok, (((IntegerKey div Inc) + 1) rem Size) * Inc};
+		{ok, #ring{hasher=Hasher, incrs=Incrs, sizes=Sizes}} ->
+			case non_empty_priority(Incrs, Sizes) of
+				{ok, {Priority, Inc}, {Priority, Size}} ->
+					Hash = Hasher(Binary),
+					IntegerKey = case Hash of
+						_ when is_binary(Hash) ->
+							ryng:bin_to_int(Hash);
+						_ ->
+							Hash
+					end,
+					{ok, {Priority, (((IntegerKey div Inc) + 1) rem Size) * Inc}};
+				PriorityError ->
+					PriorityError
+			end;
 		RingError ->
 			RingError
 	end.
@@ -172,8 +177,8 @@ init(Ring=#ring{name=Name}) ->
 	{ok, State}.
 
 %% @private
-handle_call({add_node, NodeObject, NodeWeight}, _From, State=#state{name=RingName, nodes=Nodes}) ->
-	Node = #node{object=NodeObject, weight=NodeWeight},
+handle_call({add_node, NodeObject, NodeWeight, NodePriority}, _From, State=#state{name=RingName, nodes=Nodes}) ->
+	Node = #node{object=NodeObject, weight=NodeWeight, priority=NodePriority},
 	case ets:insert_new(Nodes, Node) of
 		true ->
 			ryng_event:node_add(RingName, Node),
@@ -245,6 +250,16 @@ pointers_table(RingName) ->
 	list_to_atom("ryng_" ++ atom_to_list(RingName) ++ "_pointers").
 
 %% @private
+non_empty_priority([], _) ->
+	{error, ring_empty};
+non_empty_priority(_, []) ->
+	{error, ring_empty};
+non_empty_priority([{Priority, _} | Increments], [{Priority, 0} | Sizes]) ->
+	non_empty_priority(Increments, Sizes);
+non_empty_priority([{Priority, Increment} | _], [{Priority, Size} | _]) ->
+	{ok, {Priority, Increment}, {Priority, Size}}.
+
+%% @private
 rebalance(State=#state{name=RingName, nodes=NTab, pointers=PTab}) ->
 	case ets:match_object(NTab, '_') of
 		[] ->
@@ -252,8 +267,8 @@ rebalance(State=#state{name=RingName, nodes=NTab, pointers=PTab}) ->
 			{noreply, State};
 		Nodes when is_list(Nodes) ->
 			case ryng:refresh_ring(RingName) of
-				{ok, #ring{name=RingName, max=Max, inc=Inc}} ->
-					Pointers = make_pointers(Nodes, Max, Inc, 0, []),
+				{ok, #ring{name=RingName, max=Max, incrs=Incrs}} ->
+					Pointers = make_pointers(Nodes, Max, Incrs, 0, []),
 					true = ets:match_delete(PTab, '_'),
 					true = ets:insert(PTab, Pointers),
 					{noreply, State};
@@ -263,15 +278,16 @@ rebalance(State=#state{name=RingName, nodes=NTab, pointers=PTab}) ->
 	end.
 
 %% @private
-make_pointers([], _Maximum, _Increment, _Index, Pointers) ->
+make_pointers([], _Maximum, _Increments, _Index, Pointers) ->
 	Pointers;
-make_pointers([#node{object=NodeObject, weight=NodeWeight} | Nodes], Maximum, Increment, Index, Pointers) ->
-	{Index2, Pointers2} = make_pointer(NodeWeight+1, NodeObject, Maximum, Increment, Index, Pointers),
-	make_pointers(Nodes, Maximum, Increment, Index2, Pointers2).
+make_pointers([#node{object=NodeObject, priority=NodePriority, weight=NodeWeight} | Nodes], Maximum, Increments, Index, Pointers) ->
+	{NodePriority, Increment} = lists:keyfind(NodePriority, 1, Increments),
+	{Index2, Pointers2} = make_pointer(NodeWeight+1, NodeObject, NodePriority, Maximum, Increment, Index, Pointers),
+	make_pointers(Nodes, Maximum, Increments, Index2, Pointers2).
 
 %% @private
-make_pointer(0, _Object, _Maximum, _Increment, Index, Pointers) ->
+make_pointer(0, _Object, _Priority, _Maximum, _Increment, Index, Pointers) ->
 	{Index, Pointers};
-make_pointer(Weight, Object, Maximum, Increment, Index, Pointers) ->
-	Pointer = #pointer{index=Index, object=Object},
-	make_pointer(Weight - 1, Object, Maximum, Increment, Index + Increment, [Pointer | Pointers]).
+make_pointer(Weight, Object, Priority, Maximum, Increment, Index, Pointers) ->
+	Pointer = #pointer{index={Priority, Index}, object=Object},
+	make_pointer(Weight - 1, Object, Priority, Maximum, Increment, Index + Increment, [Pointer | Pointers]).

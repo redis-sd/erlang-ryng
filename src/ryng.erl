@@ -25,7 +25,7 @@
 	is_ring/1, sync_ring/1, refresh_ring/1, set_ring/2]).
 
 %% Node API
--export([list_nodes/1, add_node/2, add_node/3, del_node/2, is_node/2]).
+-export([list_nodes/1, add_node/2, add_node/3, add_node/4, del_node/2, is_node/2]).
 
 %% Object API
 -export([balance_check/2, balance_summary/1, hash_for/2, index_for/2,
@@ -126,17 +126,10 @@ sync_ring(RingName) ->
 %% @private
 refresh_ring(RingName) ->
 	case get_ring(RingName) of
-		{ok, Ring=#ring{name=RingName, max=Max}} ->
+		{ok, Ring=#ring{name=RingName}} ->
 			case list_nodes(RingName) of
 				{ok, Nodes} ->
-					Size = lists:sum([W+1 || #node{weight=W} <- Nodes]),
-					Inc = case Size of
-						0 ->
-							Max;
-						_ ->
-							Max div Size
-					end,
-					Ring2 = Ring#ring{max=Max, inc=Inc, size=Size},
+					Ring2 = refresh_ring_by_priority(Nodes, Ring, dict:new()),
 					case gen_server:call(?SERVER, {refresh_ring, Ring2, self()}) of
 						true ->
 							{ok, Ring2};
@@ -165,7 +158,10 @@ add_node(RingName, NodeObject) ->
 	add_node(RingName, NodeObject, 0).
 
 add_node(RingName, NodeObject, NodeWeight) ->
-	ryng_ring:add_node(RingName, NodeObject, NodeWeight).
+	add_node(RingName, NodeObject, NodeWeight, 0).
+
+add_node(RingName, NodeObject, NodeWeight, NodePriority) ->
+	ryng_ring:add_node(RingName, NodeObject, NodeWeight, NodePriority).
 
 del_node(RingName, NodeObject) ->
 	ryng_ring:del_node(RingName, NodeObject).
@@ -200,15 +196,33 @@ balance_summary(RingName) ->
 		{ok, #ring{name=RingName}} ->
 			case list_nodes(RingName) of
 				{ok, Nodes} ->
-					Size = lists:sum([W+1 || #node{weight=W} <- Nodes]),
-					Balance = [{NodeObject, (NodeWeight + 1) / Size} || #node{object=NodeObject, weight=NodeWeight} <- Nodes],
-					{ok, Balance};
+					Summary = balance_summary_nodes(Nodes, dict:new()),
+					% {Sizes, Priorities} = lists:foldl(fun(#node{object=O, priority=P, weight=W}, {SS, PP}) ->
+					% 	{dict:update_counter(P, W + 1, SS), dict:append(P, {W, O}, PP)}
+					% end, {dict:new(), dict:new()}, Nodes),
+					% Balances = dict:fold(fun(P, WOs, B) ->
+					% 	S = dict:find(P, Sizes),
+					% 	[[{O, (W + 1) / S} || {W, O} <- WOs] | B]
+					% end, [], Priorities), 
+					% Balance = [{NodeObject, (NodeWeight + 1) / Size} || #node{object=NodeObject, weight=NodeWeight} <- Nodes],
+					{ok, Summary};
 				NodesError ->
 					NodesError
 			end;
 		RingError ->
 			RingError
 	end.
+
+balance_summary_nodes([], Balance) ->
+	Summary = dict:fold(fun(Priority, {Size, WeightedObjects}, S) ->
+		gb_sets:union(S, gb_sets:from_list([{Priority, Object, Weight / Size} || {Object, Weight} <- WeightedObjects]))
+	end, gb_sets:new(), Balance),
+	gb_sets:to_list(Summary);
+balance_summary_nodes([#node{object=Object, priority=Priority, weight=Weight} | Nodes], Balance) ->
+	Balance2 = dict:update(Priority, fun({Size, WeightedObjects}) ->
+		{Size + Weight + 1, [{Object, Weight + 1} | WeightedObjects]}
+	end, {Weight + 1, [{Object, Weight + 1}]}, Balance),
+	balance_summary_nodes(Nodes, Balance2).
 
 hash_for(RingName, Binary) when is_binary(Binary) ->
 	ryng_ring:hash_for(RingName, Binary).
@@ -262,9 +276,9 @@ handle_call({set_ring, Ring=#ring{name=Ref, hash=Hash, bits=Bits}, Pid}, _From, 
 						Bits
 				end,
 				Max = trunc(math:pow(2, Bits2) - 1),
-				Inc = Max,
-				Size = 0,
-				Ring2 = Ring#ring{bits=Bits2, hasher=Hasher, max=Max, inc=Inc, size=Size},
+				Incrs = [{0, Max}],
+				Sizes = [{0, 0}],
+				Ring2 = Ring#ring{bits=Bits2, hasher=Hasher, max=Max, incrs=Incrs, sizes=Sizes},
 				true = ets:insert(?TAB_RINGS, Ring2),
 				ryng_event:ring_add(Ring2),
 				{reply, true, State2}
@@ -394,6 +408,18 @@ int_to_bin_neg(X, B, D) when B >= 8 ->
 	int_to_bin_neg(X bsr 8, B - 8, << (X band 255), D/binary >>);
 int_to_bin_neg(_X, _B, _D) ->
 	badarg.
+
+%% @private
+refresh_ring_by_priority([], Ring=#ring{max=Max}, SizesDict) ->
+	{Sizes, Increments} = dict:fold(fun
+		(P, 0, {SS, II}) ->
+			{gb_sets:add_element({P, 0}, SS), gb_sets:add_element({P, Max}, II)};
+		(P, S, {SS, II}) ->
+			{gb_sets:add_element({P, S}, SS), gb_sets:add_element({P, Max div S}, II)}
+	end, {gb_sets:new(), gb_sets:new()}, SizesDict),
+	Ring#ring{sizes=gb_sets:to_list(Sizes), incrs=gb_sets:to_list(Increments)};
+refresh_ring_by_priority([#node{priority=Priority, weight=Weight} | Nodes], Ring, Sizes) ->
+	refresh_ring_by_priority(Nodes, Ring, dict:update_counter(Priority, Weight + 1, Sizes)).
 
 %% @doc Start the given applications if they were not already started.
 %% @private

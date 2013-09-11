@@ -10,25 +10,32 @@
 %%%-------------------------------------------------------------------
 
 -type ring_hasher() ::
-	fun((binary()) -> binary()).
+	fun((binary()) -> bitstring() | integer()).
+
+-type node_object()   :: term().
+-type node_priority() :: non_neg_integer().
+-type node_weight()   :: non_neg_integer().
+
+-type pointer_index() :: non_neg_integer().
 
 -record(ring, {
 	name = undefined :: undefined | atom(),
 	hash = sha       :: atom() | function() | {function(), [any()]} | {module(), atom(), [any()]},
-	bits = undefined :: undefined | integer(),
+	bits = undefined :: undefined | non_neg_integer(),
 
 	hasher = undefined :: undefined | ring_hasher(),
-	inc    = undefined :: undefined | integer(),
-	max    = undefined :: undefined | integer(),
-	size   = undefined :: undefined | integer()
+	max    = undefined :: undefined | pointer_index(),
+	incrs  = undefined :: undefined | [{node_priority(), pointer_index()}],
+	sizes  = undefined :: undefined | [{node_priority(), node_weight()}]
 }).
 
 -record(node, {
-	object = undefined :: undefined | term(),
-	weight = undefined :: undefined | non_neg_integer()
+	object   = undefined :: undefined | node_object(),
+	priority = undefined :: undefined | node_priority(),
+	weight   = undefined :: undefined | node_weight()
 }).
 
 -record(pointer, {
-	index  = undefined :: undefined | integer(),
-	object = undefined :: undefined | term()
+	index  = undefined :: undefined | {node_priority(), pointer_index()},
+	object = undefined :: undefined | node_object()
 }).
