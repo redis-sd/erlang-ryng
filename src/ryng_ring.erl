@@ -15,7 +15,8 @@
 
 %% API
 -export([start_link/1, graceful_shutdown/1]).
--export([list_nodes/1, add_node/4, del_node/2, is_node/2]).
+-export([list_nodes/1, add_node/4, del_node/2, get_node/2, is_node/2,
+	is_empty/1, set_node/4]).
 -export([hash_for/2, index_for/2, key_for/2, key_of/1, node_for/2]).
 
 %% gen_server callbacks
@@ -68,10 +69,46 @@ del_node(RingName, NodeObject) ->
 			{error, ring_not_found}
 	end.
 
+get_node(RingName, NodeObject) ->
+	case ryng:is_ring(RingName) of
+		true ->
+			case ets:lookup(nodes_table(RingName), NodeObject) of
+				[Node=#node{}] ->
+					{ok, Node};
+				_ ->
+					{error, node_not_found}
+			end;
+		false ->
+			{error, ring_not_found}
+	end.
+
 is_node(RingName, NodeObject) ->
 	case ryng:is_ring(RingName) of
 		true ->
 			ets:member(nodes_table(RingName), NodeObject);
+		false ->
+			{error, ring_not_found}
+	end.
+
+is_empty(RingName) ->
+	case ryng:is_ring(RingName) of
+		true ->
+			case ets:first(nodes_table(RingName)) of
+				'$end_of_table' ->
+					true;
+				_ ->
+					false
+			end;
+		false ->
+			{error, ring_not_found}
+	end.
+
+set_node(RingName, NodeObject, NodeWeight, NodePriority)
+		when is_integer(NodeWeight) andalso NodeWeight >= 0
+		andalso is_integer(NodePriority) andalso NodePriority >= 0 ->
+	case ryng:is_ring(RingName) of
+		true ->
+			gen_server:call(RingName, {set_node, NodeObject, NodeWeight, NodePriority});
 		false ->
 			{error, ring_not_found}
 	end.
@@ -195,6 +232,22 @@ handle_call({del_node, NodeObject}, _From, State=#state{name=RingName, nodes=Nod
 			{reply, ok, State#state{dirty=true}};
 		false ->
 			{reply, {error, node_not_found}, State}
+	end;
+handle_call({set_node, NodeObject, NodeWeight, NodePriority}, _From, State=#state{name=RingName, nodes=Nodes}) ->
+	Node = #node{object=NodeObject, weight=NodeWeight, priority=NodePriority},
+	case ?MODULE:get_node(RingName, NodeObject) of
+		{ok, Node} ->
+			{reply, ok, State};
+		{ok, _} ->
+			true = ets:insert(Nodes, Node),
+			ryng_event:node_set(RingName, Node),
+			{reply, ok, State#state{dirty=true}};
+		{error, node_not_found} ->
+			true = ets:insert(Nodes, Node),
+			ryng_event:node_add(RingName, Node),
+			{reply, ok, State#state{dirty=true}};
+		RingError ->
+			{reply, RingError, State}
 	end;
 handle_call(sync_ring, _From, State=#state{iref=IRef}) ->
 	catch timer:cancel(IRef),

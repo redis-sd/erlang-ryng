@@ -22,10 +22,11 @@
 
 %% Ring API
 -export([list_rings/0, new_ring/1, rm_ring/1, delete_ring/1, get_ring/1,
-	is_ring/1, sync_ring/1, refresh_ring/1, set_ring/2]).
+	is_ring/1, is_ring_empty/1, sync_ring/1, refresh_ring/1, set_ring/2]).
 
 %% Node API
--export([list_nodes/1, add_node/2, add_node/3, add_node/4, del_node/2, is_node/2]).
+-export([list_nodes/1, add_node/2, add_node/3, add_node/4, del_node/2,
+	get_node/2, is_node/2, set_node/4]).
 
 %% Object API
 -export([balance_check/2, balance_summary/1, hash_for/2, index_for/2,
@@ -120,6 +121,9 @@ get_ring(RingName) ->
 is_ring(RingName) ->
 	ets:member(?TAB_RINGS, RingName).
 
+is_ring_empty(RingName) ->
+	ryng_ring:is_empty(RingName).
+
 sync_ring(RingName) ->
 	gen_server:call(RingName, sync_ring).
 
@@ -166,8 +170,14 @@ add_node(RingName, NodeObject, NodeWeight, NodePriority) ->
 del_node(RingName, NodeObject) ->
 	ryng_ring:del_node(RingName, NodeObject).
 
+get_node(RingName, NodeObject) ->
+	ryng_ring:get_node(RingName, NodeObject).
+
 is_node(RingName, NodeObject) ->
 	ryng_ring:is_node(RingName, NodeObject).
+
+set_node(RingName, NodeObject, NodeWeight, NodePriority) ->
+	ryng_ring:set_node(RingName, NodeObject, NodeWeight, NodePriority).
 
 %%%===================================================================
 %%% Object API functions
@@ -197,14 +207,6 @@ balance_summary(RingName) ->
 			case list_nodes(RingName) of
 				{ok, Nodes} ->
 					Summary = balance_summary_nodes(Nodes, dict:new()),
-					% {Sizes, Priorities} = lists:foldl(fun(#node{object=O, priority=P, weight=W}, {SS, PP}) ->
-					% 	{dict:update_counter(P, W + 1, SS), dict:append(P, {W, O}, PP)}
-					% end, {dict:new(), dict:new()}, Nodes),
-					% Balances = dict:fold(fun(P, WOs, B) ->
-					% 	S = dict:find(P, Sizes),
-					% 	[[{O, (W + 1) / S} || {W, O} <- WOs] | B]
-					% end, [], Priorities), 
-					% Balance = [{NodeObject, (NodeWeight + 1) / Size} || #node{object=NodeObject, weight=NodeWeight} <- Nodes],
 					{ok, Summary};
 				NodesError ->
 					NodesError

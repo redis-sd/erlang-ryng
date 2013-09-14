@@ -14,7 +14,7 @@
 
 %% API
 -export([manager/0, add_handler/2]).
--export([node_add/2, node_del/2, ring_add/1, ring_del/1, ring_refresh/1]).
+-export([node_add/2, node_del/2, node_set/2, ring_add/1, ring_del/1, ring_refresh/1]).
 
 %%%===================================================================
 %%% API functions
@@ -31,6 +31,9 @@ node_add(RingName, Node) ->
 
 node_del(RingName, NodeObject) ->
 	notify({node, del, RingName, NodeObject}).
+
+node_set(RingName, Node) ->
+	notify({ring, set, RingName, Node}).
 
 ring_add(Ring) ->
 	notify({ring, add, Ring}).
