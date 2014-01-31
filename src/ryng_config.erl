@@ -2,7 +2,7 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
@@ -23,13 +23,13 @@
 %%% API functions
 %%%===================================================================
 
--spec list_to_ring([{atom(), term()}]) -> #ring{}.
+-spec list_to_ring([{atom(), term()}]) -> ryng_ring().
 list_to_ring(R) ->
-	Default = #ring{},
-	#ring{
-		name = req(name, R),
-		hash = opt(hash, R, Default#ring.hash),
-		bits = opt(bits, R, Default#ring.bits)
+	Default = ?RYNG_RING{},
+	?RYNG_RING{
+		id   = req(id, R),
+		hash = opt(hash, R, Default?RYNG_RING.hash),
+		bits = opt(bits, R, Default?RYNG_RING.bits)
 	}.
 
 %%%-------------------------------------------------------------------

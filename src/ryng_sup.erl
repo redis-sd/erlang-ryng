@@ -2,7 +2,7 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
@@ -31,28 +31,28 @@ start_link() ->
 
 %% @doc Create a new ring from proplist ring config `RingConfig'. The
 %% public API for this functionality is {@link ryng:new_ring/1}.
-new_ring(RingConfig) ->
-	NewRing = ryng_config:list_to_ring(RingConfig),
-	Spec = ring_sup_spec(NewRing),
+new_ring(RingConfig) when is_list(RingConfig) ->
+	new_ring(ryng_config:list_to_ring(RingConfig));
+new_ring(Ring=?RYNG_RING{}) ->
+	Spec = ring_spec(Ring),
 	supervisor:start_child(?MODULE, Spec).
 
 %% @doc Gracefully shutdown the named ring.
-rm_ring(Name) ->
-	case ryng_ring_sup:graceful_shutdown(Name) of
+rm_ring(Id) ->
+	case ryng_ring:graceful_shutdown(Id) of
 		ok ->
 			ok;
 		forced_shutdown ->
-			delete_ring(Name)
+			delete_ring(Id)
 	end.
 
 %% @doc Forcefully shutdown the named ring.
-delete_ring(Name) ->
-	SupName = ring_sup_name(Name),
-	case supervisor:terminate_child(?MODULE, SupName) of
+delete_ring(Id) ->
+	case supervisor:terminate_child(?MODULE, {ryng_ring, Id}) of
 		{error, not_found} ->
 			ok;
 		ok ->
-			supervisor:delete_child(?MODULE, SupName);
+			supervisor:delete_child(?MODULE, {ryng_ring, Id});
 		Error ->
 			Error
 	end.
@@ -70,10 +70,12 @@ init([]) ->
 			[]
 	end,
 	Rings = [ryng_config:list_to_ring(L) || L <- Configs],
-	RingSupSpecs = [ring_sup_spec(Ring) || Ring <- Rings],
-	{ok, {{one_for_one, 5, 10}, [
+	RingSpecs = [ring_spec(Ring) || Ring <- Rings],
+	%% five restarts in 10 seconds, then shutdown
+	Restart = {one_for_all, 5, 10},
+	{ok, {Restart, [
 		?CHILD(ryng, worker)
-		| RingSupSpecs
+		| RingSpecs
 	]}}.
 
 %%%-------------------------------------------------------------------
@@ -81,12 +83,7 @@ init([]) ->
 %%%-------------------------------------------------------------------
 
 %% @private
-ring_sup_spec(Ring=#ring{name=Name}) ->
-	SupName = ring_sup_name(Name),
-	{SupName,
-		{ryng_ring_sup, start_link, [Ring]},
-		transient, 5000, supervisor, [ryng_ring_sup]}.
-
-%% @private
-ring_sup_name(Name) ->
-	list_to_atom("ryng_" ++ atom_to_list(Name) ++ "_ring_sup").
+ring_spec(Ring=?RYNG_RING{id=Id}) ->
+	{{ryng_ring, Id},
+		{ryng_ring, start_link, [Ring]},
+		transient, 2000, worker, [ryng_ring]}.

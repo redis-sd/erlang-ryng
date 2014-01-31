@@ -1,12 +1,30 @@
 PROJECT = ryng
 
-REBAR := $(shell which rebar 2>&1 >/dev/null; if [ $$? -eq 0 ]; then which rebar; else echo $(shell pwd)/rebar; fi)
-REBAR_BUILD_DIR := $(shell pwd)/.rebar-build
-
 COVERAGE ?= 0
 TEST ?= 0
 
 V ?= 0
+
+## dialyzer
+
+DIALYZER ?= dialyzer
+
+dialyzer_verbose_0 = @echo ":: DIALYZER" $(@F);
+dialyzer_verbose = $(dialyzer_verbose_$(V))
+
+dialyzer = $(dialyzer_verbose) $(DIALYZER)
+
+## rebar
+
+REBAR_URL ?= https://github.com/Pagoda/rebar/releases/download/2.1.0/rebar
+
+define get_rebar
+	wget -O $(REBAR) $(REBAR_URL) || rm $(REBAR)
+	chmod +x $(REBAR)
+endef
+
+REBAR := $(shell command -v rebar 2>&1 >/dev/null; if [ $$? -eq 0 ]; then command -v rebar; else echo $(shell pwd)/rebar; fi)
+REBAR_BUILD_DIR := $(shell pwd)/.rebar-build
 
 rebar_args_3 = -v 3
 rebar_args_2 = -v 2
@@ -18,23 +36,19 @@ rebar_verbose = $(rebar_verbose_$(V))
 
 rebar = $(rebar_verbose) V=$(V) TEST=$(TEST) $(REBAR) $(rebar_args)
 
-DIALYZER ?= dialyzer
-
-dialyzer_verbose_0 = @echo ":: DIALYZER" $(@F);
-dialyzer_verbose = $(dialyzer_verbose_$(V))
-
-dialyzer = $(dialyzer_verbose) $(DIALYZER)
-
-.PHONY: deps compile build clean appclean distclean docs xref build-plt \
-	check-plt dialyze coverage ct eunit test-env test-deps test-compile \
-	test-build test-appclean test-clean test
+.PHONY: deps update-deps deps-compile compile build clean clean-app distclean
 
 all: deps build
 
 deps: $(REBAR)
-	$(rebar) update-deps
 	$(rebar) get-deps
 	$(rebar) check-deps
+
+update-deps: $(REBAR)
+	$(rebar) update-deps
+
+deps-compile: $(REBAR)
+	$(rebar) skip_apps=$(PROJECT) compile
 
 compile: $(REBAR)
 	$(rebar) skip_deps=true compile
@@ -45,7 +59,7 @@ build: $(REBAR)
 clean: $(REBAR)
 	$(rebar) clean
 
-appclean: $(REBAR)
+clean-app: $(REBAR)
 	$(rebar) skip_deps=true clean
 
 distclean: clean
@@ -54,10 +68,12 @@ distclean: clean
 ##
 ## Docs
 ##
+.PHONY: docs xref
+
 docs: $(REBAR)
 	$(rebar) skip_deps=true doc
 
-xref:
+xref: $(REBAR)
 	$(rebar) xref
 
 ##
@@ -70,6 +86,8 @@ PLT_DEPS ?= asn1 compiler crypto edoc erts gs hipe inets kernel \
 PLT_APPS ?= .
 DIALYZER_OPTS ?= -Werror_handling -Wno_return -Wrace_conditions \
 	-Wunmatched_returns
+
+.PHONY: build-plt check-plt dialyze
 
 build-plt: clean compile
 	$(dialyzer) --build_plt --output_plt $(PLT) --apps $(PLT_DEPS) $(PLT_APPS) \
@@ -88,43 +106,51 @@ $(PLT):
 ##
 ## Tests
 ##
+.PHONY: coverage ct eunit test-deps test-deps-compile test-compile test-build test-clean test test-app
+
 coverage: COVERAGE=1
 coverage: test
 
 ct: TEST=1
-ct: test-env
+ct: $(REBAR)
 	$(rebar) skip_deps=true ct
 
 eunit: TEST=1
-eunit: test-env
+eunit: $(REBAR)
 	$(rebar) skip_deps=true eunit
 
-test-env:
-	touch .rebar-test
-
 test-deps: TEST=1
-test-deps: test-env deps
+test-deps: deps
+
+test-deps-compile: TEST=1 EUNIT_NOAUTO=1
+test-deps-compile: deps-compile
 
 test-compile: TEST=1 EUNIT_NOAUTO=1
-test-compile: test-env compile
+test-compile: compile
 
 test-build: TEST=1 EUNIT_NOAUTO=1
-test-build: test-env build
+test-build: build
 
 test-clean: TEST=1
-test-clean: test-env clean
+test-clean: clean
 
-test-appclean: TEST=1
-test-appclean: test-env appclean
+test: test-deps test-clean test-build ct
 
-test: test-clean test-deps test-build ct
+test-app: TEST=1 EUNIT_NOAUTO=1
+test-app: COVERAGE=1
+test-app: clean-app compile ct
 
 ##
 ## rebar
 ##
+.PHONY: rebar update-rebar
+
 rebar: $(REBAR)
 
 $(REBAR):
+	@$(call get_rebar)
+
+update-rebar:
 	@rm -rf $(REBAR_BUILD_DIR)
 	git clone git://github.com/rebar/rebar.git $(REBAR_BUILD_DIR)
 	cd $(REBAR_BUILD_DIR) && ./bootstrap

@@ -2,7 +2,7 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
@@ -11,6 +11,8 @@
 -module(ryng_event).
 
 -include("ryng.hrl").
+
+-define(MANAGER, ryng_manager).
 
 %% API
 -export([manager/0, add_handler/2]).
@@ -21,7 +23,7 @@
 %%%===================================================================
 
 manager() ->
-	ryng_manager.
+	?MANAGER.
 
 add_handler(Handler, Pid) ->
 	gen_event:add_handler(manager(), Handler, Pid).

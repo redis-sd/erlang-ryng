@@ -3,7 +3,7 @@
 
 {application, ryng, [
 	{description, "Generic consistent hash algorithm handler for rings."},
-	{vsn, "0.0.0"},
+	{vsn, "0.1.0"},
 	{modules, []},
 	{registered, []},
 	{applications, [

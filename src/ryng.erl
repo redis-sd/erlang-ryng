@@ -2,7 +2,7 @@
 %% vim: ts=4 sw=4 ft=erlang noet
 %%%-------------------------------------------------------------------
 %%% @author Andrew Bennett <andrew@pagodabox.com>
-%%% @copyright 2013, Pagoda Box, Inc.
+%%% @copyright 2014, Pagoda Box, Inc.
 %%% @doc
 %%%
 %%% @end
@@ -16,13 +16,20 @@
 -define(SERVER, ?MODULE).
 -define(TAB, ?MODULE).
 -define(TAB_RINGS, ryng_rings).
+-define(TAB_NODES, ryng_nodes).
+-define(TAB_PTRS, ryng_ptrs).
 
 %% API
--export([manual_start/0, start_link/0, int_to_bin/1, int_to_bin/2, bin_to_int/1]).
+-export([manual_start/0, start_link/0]).
+-export([int_to_bin/1, int_to_bin/2, bin_to_int/1]).
+
+%% Name Server API
+-export([register_name/2, whereis_name/1, unregister_name/1, send/2]).
 
 %% Ring API
 -export([list_rings/0, new_ring/1, rm_ring/1, delete_ring/1, get_ring/1,
-	is_ring/1, is_ring_empty/1, sync_ring/1, refresh_ring/1, set_ring/2]).
+	is_ring/1, is_ring_empty/1, sync_ring/1]).
+-export([nodes_table/1, ptrs_table/1, refresh_ring/1, resolve_ring/1]).
 
 %% Node API
 -export([list_nodes/1, add_node/2, add_node/3, add_node/4, del_node/2,
@@ -95,6 +102,48 @@ bin_to_int(X) ->
 	erlang:error(badarg, [X]).
 
 %%%===================================================================
+%%% Name Server API functions
+%%%===================================================================
+
+-spec register_name(Name::term(), Pid::pid()) -> 'yes' | 'no'.
+register_name(Name, Pid) when is_pid(Pid) ->
+	gen_server:call(?SERVER, {register_name, Name, Pid}, infinity).
+
+-spec whereis_name(Name::term()) -> pid() | 'undefined'.
+whereis_name(Name) ->
+	case ets:lookup(?TAB, {pid, Name}) of
+		[{{pid, Name}, Pid}] ->
+			case erlang:is_process_alive(Pid) of
+				true ->
+					Pid;
+				false ->
+					undefined
+			end;
+		[] ->
+			undefined
+	end.
+
+-spec unregister_name(Name::term()) -> term().
+unregister_name(Name) ->
+	case whereis_name(Name) of
+		undefined ->
+			ok;
+		_ ->
+			_ = ets:delete(?TAB, {pid, Name}),
+			ok
+	end.
+
+-spec send(Name::term(), Msg::term()) -> Pid::pid().
+send(Name, Msg) ->
+	case whereis_name(Name) of
+		Pid when is_pid(Pid) ->
+			Pid ! Msg,
+			Pid;
+		undefined ->
+			erlang:error(badarg, [Name, Msg])
+	end.
+
+%%%===================================================================
 %%% Ring API functions
 %%%===================================================================
 
@@ -104,91 +153,148 @@ list_rings() ->
 new_ring(RingConfig) ->
 	ryng_sup:new_ring(RingConfig).
 
-rm_ring(RingName) ->
-	ryng_sup:rm_ring(RingName).
+rm_ring(RingId) ->
+	ryng_sup:rm_ring(RingId).
 
-delete_ring(RingName) ->
-	ryng_sup:delete_ring(RingName).
+delete_ring(RingId) ->
+	ryng_sup:delete_ring(RingId).
 
-get_ring(RingName) ->
-	case ets:lookup(?TAB_RINGS, RingName) of
-		[Ring=#ring{}] ->
+get_ring(RingId) ->
+	case ets:lookup(?TAB_RINGS, RingId) of
+		[Ring=?RYNG_RING{}] ->
 			{ok, Ring};
 		_ ->
 			{error, ring_not_found}
 	end.
 
-is_ring(RingName) ->
-	ets:member(?TAB_RINGS, RingName).
+is_ring(RingId) ->
+	ets:member(?TAB_RINGS, RingId).
 
-is_ring_empty(RingName) ->
-	ryng_ring:is_empty(RingName).
+is_ring_empty(RingId) ->
+	ryng_ring:is_empty(RingId).
 
-sync_ring(RingName) ->
-	gen_server:call(RingName, sync_ring).
+sync_ring(RingId) ->
+	gen_server:call({via, ryng, RingId}, sync_ring).
 
 %% @private
-refresh_ring(RingName) ->
-	case get_ring(RingName) of
-		{ok, Ring=#ring{name=RingName}} ->
-			case list_nodes(RingName) of
-				{ok, Nodes} ->
-					Ring2 = refresh_ring_by_priority(Nodes, Ring, dict:new()),
-					case gen_server:call(?SERVER, {refresh_ring, Ring2, self()}) of
-						true ->
-							{ok, Ring2};
-						false ->
-							{error, not_ring_owner}
+nodes_table(RingId) ->
+	ets:lookup_element(?TAB_RINGS, RingId, ?RYNG_RING.nodes).
+
+%% @private
+ptrs_table(RingId) ->
+	ets:lookup_element(?TAB_RINGS, RingId, ?RYNG_RING.ptrs).
+
+%% @private
+refresh_ring(RingId) ->
+	case is_ring_owner(RingId) of
+		false ->
+			{error, not_ring_owner};
+		true ->
+			case get_ring(RingId) of
+				{ok, Ring=?RYNG_RING{id=RingId}} ->
+					case list_nodes(RingId) of
+						{ok, Nodes} ->
+							Ring2 = refresh_ring_by_priority(Nodes, Ring, dict:new()),
+							Reply = gen_server:call(?SERVER, {refresh_ring, Ring2}),
+							{Reply, Ring2};
+						ListNodesError ->
+							ListNodesError
 					end;
-				NodesError ->
-					NodesError
-			end;
-		RingError ->
-			RingError
+				GetRingError ->
+					GetRingError
+			end
 	end.
 
 %% @private
-set_ring(RingName, Pid) ->
-	gen_server:call(?SERVER, {set_ring, RingName, Pid}).
+resolve_ring(Ring=?RYNG_RING{id=RingId, hash=Hash, bits=Bits}) ->
+	case is_ring_owner(RingId) of
+		false ->
+			false;
+		true ->
+			case ets:lookup(?TAB_RINGS, RingId) of
+				[OldRing=?RYNG_RING{id=RingId, hash=Hash, bits=Bits, nodes=Nodes, ptrs=Ptrs}] ->
+					Nodes = ryng_ets:give_away(Nodes),
+					Ptrs = ryng_ets:give_away(Ptrs),
+					{true, OldRing};
+				[?RYNG_RING{id=RingId, nodes=Nodes, ptrs=Ptrs}] ->
+					catch ets:delete(Nodes),
+					catch ets:delete(Ptrs),
+					true = gen_server:call(?SERVER, {drop_ring, RingId}),
+					resolve_new_ring(Ring);
+				[] ->
+					resolve_new_ring(Ring)
+			end
+	end.
+
+%% @private
+resolve_new_ring(Ring=?RYNG_RING{nodes=undefined, ptrs=undefined, hash=Hash, bits=Bits}) ->
+	Nodes = ryng_ets:new({?TAB_NODES, erlang:make_ref()}, [
+		protected,
+		ordered_set,
+		{keypos, ?RYNG_NODE.object},
+		{write_concurrency, false},
+		{read_concurrency, true}
+	]),
+	Ptrs = ryng_ets:new({?TAB_PTRS, erlang:make_ref()}, [
+		protected,
+		ordered_set,
+		{keypos, ?RYNG_PTR.index},
+		{write_concurrency, false},
+		{read_concurrency, true}
+	]),
+	Hasher = hasher(Hash),
+	Bits2 = case Bits of
+		undefined ->
+			bit_size(Hasher(<<>>));
+		_ when is_integer(Bits) ->
+			Bits
+	end,
+	Max = trunc(math:pow(2, Bits2) - 1),
+	Incrs = [{0, Max}],
+	Sizes = [{0, 0}],
+	Ring2 = Ring?RYNG_RING{bits=Bits2, hasher=Hasher, max=Max,
+		incrs=Incrs, sizes=Sizes, nodes=Nodes, ptrs=Ptrs},
+	Reply = gen_server:call(?SERVER, {add_ring, Ring2}),
+	{Reply, Ring2}.
 
 %%%===================================================================
 %%% Node API functions
 %%%===================================================================
 
-list_nodes(RingName) ->
-	ryng_ring:list_nodes(RingName).
+list_nodes(RingId) ->
+	ryng_ring:list_nodes(RingId).
 
-add_node(RingName, NodeObject) ->
-	add_node(RingName, NodeObject, 0).
+add_node(RingId, NodeObject) ->
+	add_node(RingId, NodeObject, 0).
 
-add_node(RingName, NodeObject, NodeWeight) ->
-	add_node(RingName, NodeObject, NodeWeight, 0).
+add_node(RingId, NodeObject, NodeWeight) ->
+	add_node(RingId, NodeObject, NodeWeight, 0).
 
-add_node(RingName, NodeObject, NodeWeight, NodePriority) ->
-	ryng_ring:add_node(RingName, NodeObject, NodeWeight, NodePriority).
+add_node(RingId, NodeObject, NodeWeight, NodePriority) ->
+	ryng_ring:add_node(RingId, NodeObject, NodeWeight, NodePriority).
 
-del_node(RingName, NodeObject) ->
-	ryng_ring:del_node(RingName, NodeObject).
+del_node(RingId, NodeObject) ->
+	ryng_ring:del_node(RingId, NodeObject).
 
-get_node(RingName, NodeObject) ->
-	ryng_ring:get_node(RingName, NodeObject).
+get_node(RingId, NodeObject) ->
+	ryng_ring:get_node(RingId, NodeObject).
 
-is_node(RingName, NodeObject) ->
-	ryng_ring:is_node(RingName, NodeObject).
+is_node(RingId, NodeObject) ->
+	ryng_ring:is_node(RingId, NodeObject).
 
-set_node(RingName, NodeObject, NodeWeight, NodePriority) ->
-	ryng_ring:set_node(RingName, NodeObject, NodeWeight, NodePriority).
+set_node(RingId, NodeObject, NodeWeight, NodePriority) ->
+	ryng_ring:set_node(RingId, NodeObject, NodeWeight, NodePriority).
 
 %%%===================================================================
 %%% Object API functions
 %%%===================================================================
 
-balance_check(RingName, Iterations) when is_integer(Iterations) andalso Iterations > 0 ->
-	case node_for(RingName, 0) of
+balance_check(RingId, Iterations) when is_integer(Iterations) andalso Iterations > 0 ->
+	case node_for(RingId, 0) of
 		{ok, _} ->
 			Start = erlang:now(),
 			Results = [begin
-				{ok, NodeObject} = node_for(RingName, Iteration),
+				{ok, NodeObject} = node_for(RingId, Iteration),
 				NodeObject
 			end || Iteration <- lists:seq(1, Iterations)],
 			Stop = erlang:now(),
@@ -201,10 +307,10 @@ balance_check(RingName, Iterations) when is_integer(Iterations) andalso Iteratio
 			NodeError
 	end.
 
-balance_summary(RingName) ->
-	case get_ring(RingName) of
-		{ok, #ring{name=RingName}} ->
-			case list_nodes(RingName) of
+balance_summary(RingId) ->
+	case get_ring(RingId) of
+		{ok, ?RYNG_RING{id=RingId}} ->
+			case list_nodes(RingId) of
 				{ok, Nodes} ->
 					Summary = balance_summary_nodes(Nodes, dict:new()),
 					{ok, Summary};
@@ -220,7 +326,7 @@ balance_summary_nodes([], Balance) ->
 		gb_sets:union(S, gb_sets:from_list([{Priority, Object, Weight / Size} || {Object, Weight} <- WeightedObjects]))
 	end, gb_sets:new(), Balance),
 	gb_sets:to_list(Summary);
-balance_summary_nodes([#node{object=Object, priority=Priority, weight=Weight} | Nodes], Balance) ->
+balance_summary_nodes([?RYNG_NODE{object=Object, priority=Priority, weight=Weight} | Nodes], Balance) ->
 	Balance2 = dict:update(Priority, fun({Size, WeightedObjects}) ->
 		{Size + Weight + 1, [{Object, Weight + 1} | WeightedObjects]}
 	end, {Weight + 1, [{Object, Weight + 1}]}, Balance),
@@ -256,55 +362,35 @@ init([]) ->
 	?TAB_RINGS = ryng_ets:soft_new(?TAB_RINGS, [
 		named_table,
 		protected,
-		{keypos, #ring.name},
+		{keypos, ?RYNG_RING.id},
 		{write_concurrency, false},
 		{read_concurrency, true}
 	]),
-	Monitors = [{{erlang:monitor(process, Pid), Pid}, Ref} || [Ref, Pid] <- ets:match(?TAB, {{ring, '$1'}, '$2'})],
+	Monitors = [{{erlang:monitor(process, Pid), Pid}, Ref} || [Ref, Pid] <- ets:match(?TAB, {{pid, '$1'}, '$2'})],
+	% _ = [begin
+
+	% end || ?RYNG_RING{nodes=Nodes, ptrs=Ptrs} <- ets:match_object(?TAB_RINGS, '_')],
 	{ok, #state{monitors=Monitors}}.
 
 %% @private
-handle_call({set_ring, Ring=#ring{name=Ref, hash=Hash, bits=Bits}, Pid}, _From, State=#state{monitors=Monitors}) ->
-	case ets:insert_new(?TAB, {{ring, Ref}, Pid}) of
+handle_call({register_name, Name, Pid}, _From, State=#state{monitors=Monitors}) ->
+	case ets:insert_new(?TAB, {{pid, Name}, Pid}) of
 		true ->
 			MonitorRef = erlang:monitor(process, Pid),
-			State2 = State#state{monitors=[{{MonitorRef, Pid}, Ref} | Monitors]},
-			try
-				Hasher = hasher(Hash),
-				Bits2 = case Bits of
-					undefined ->
-						bit_size(Hasher(<<>>));
-					_ when is_integer(Bits) ->
-						Bits
-				end,
-				Max = trunc(math:pow(2, Bits2) - 1),
-				Incrs = [{0, Max}],
-				Sizes = [{0, 0}],
-				Ring2 = Ring#ring{bits=Bits2, hasher=Hasher, max=Max, incrs=Incrs, sizes=Sizes},
-				true = ets:insert(?TAB_RINGS, Ring2),
-				ryng_event:ring_add(Ring2),
-				{reply, true, State2}
-			catch
-				Class:Reason ->
-					error_logger:error_msg(
-						"** ~p ~p non-fatal ring error in ~p/~p~n"
-						"** Error was: ~p:~p~n** Ring was: ~p~n"
-						"** Stacktrace: ~p~n~n",
-						[?MODULE, self(), handle_call, 3, Class, Reason, Ring, erlang:get_stacktrace()]),
-					{reply, false, State2}
-			end;
+			{reply, yes, State#state{monitors=[{{MonitorRef, Pid}, Name} | Monitors]}};
 		false ->
-			{reply, false, State}
+			{reply, no, State}
 	end;
-handle_call({refresh_ring, Ring=#ring{name=Ref}, Pid}, _From, State) ->
-	case catch ets:lookup_element(?TAB, {ring, Ref}, 2) of
-		Pid ->
-			true = ets:insert(?TAB_RINGS, Ring),
-			ryng_event:ring_refresh(Ring),
-			{reply, true, State};
-		_ ->
-			{reply, false, State}
-	end;
+handle_call({drop_ring, RingId}, _From, State) ->
+	Reply = ets:delete(?TAB_RINGS, RingId),
+	{reply, Reply, State};
+handle_call({add_ring, Ring=?RYNG_RING{}}, _From, State) ->
+	Reply = ets:insert_new(?TAB_RINGS, Ring),
+	{reply, Reply, State};
+handle_call({refresh_ring, Ring=?RYNG_RING{}}, _From, State) ->
+	true = ets:insert(?TAB_RINGS, Ring),
+	ryng_event:ring_refresh(Ring),
+	{reply, true, State};
 handle_call(_Request, _From, State) ->
 	{reply, ignore, State}.
 
@@ -412,15 +498,15 @@ int_to_bin_neg(_X, _B, _D) ->
 	badarg.
 
 %% @private
-refresh_ring_by_priority([], Ring=#ring{max=Max}, SizesDict) ->
+refresh_ring_by_priority([], Ring=?RYNG_RING{max=Max}, SizesDict) ->
 	{Sizes, Increments} = dict:fold(fun
 		(P, 0, {SS, II}) ->
 			{gb_sets:add_element({P, 0}, SS), gb_sets:add_element({P, Max}, II)};
 		(P, S, {SS, II}) ->
 			{gb_sets:add_element({P, S}, SS), gb_sets:add_element({P, Max div S}, II)}
 	end, {gb_sets:new(), gb_sets:new()}, SizesDict),
-	Ring#ring{sizes=gb_sets:to_list(Sizes), incrs=gb_sets:to_list(Increments)};
-refresh_ring_by_priority([#node{priority=Priority, weight=Weight} | Nodes], Ring, Sizes) ->
+	Ring?RYNG_RING{sizes=gb_sets:to_list(Sizes), incrs=gb_sets:to_list(Increments)};
+refresh_ring_by_priority([?RYNG_NODE{priority=Priority, weight=Weight} | Nodes], Ring, Sizes) ->
 	refresh_ring_by_priority(Nodes, Ring, dict:update_counter(Priority, Weight + 1, Sizes)).
 
 %% @doc Start the given applications if they were not already started.
@@ -434,3 +520,16 @@ require([App|Tail]) ->
 		{error, {already_started, App}} -> ok
 	end,
 	require(Tail).
+
+%% @private
+is_ring_owner(RingId) ->
+	Self = self(),
+	try whereis_name(RingId) of
+		Self ->
+			true;
+		_ ->
+			false
+	catch
+		_:_ ->
+			false
+	end.

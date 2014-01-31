@@ -119,21 +119,21 @@ smoke(Config) ->
 %% @private
 config_for_group(default) ->
 	{default_ring, [
-		{name, default_ring}
+		{id, default_ring}
 	]};
 config_for_group(crypto_md5) ->
 	{crypto_md5_ring, [
-		{name, crypto_md5_ring},
+		{id, crypto_md5_ring},
 		{hash, md5}
 	]};
 config_for_group(crypto_sha) ->
 	{crypto_sha_ring, [
-		{name, crypto_sha_ring},
+		{id, crypto_sha_ring},
 		{hash, sha}
 	]};
 config_for_group(erlang_phash2) ->
 	{erlang_phash2_ring, [
-		{name, erlang_phash2_ring},
+		{id, erlang_phash2_ring},
 		{hash, {erlang, phash2}},
 		{bits, 27}
 	]}.
