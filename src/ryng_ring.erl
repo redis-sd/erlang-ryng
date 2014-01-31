@@ -17,7 +17,8 @@
 -export([start_link/1, graceful_shutdown/1]).
 -export([list_nodes/1, add_node/4, del_node/2, get_node/2, is_node/2,
 	is_empty/1, set_node/4]).
--export([hash_for/2, index_for/2, key_for/2, key_of/1, node_for/2]).
+-export([hash_for/2, index_for/2, key_for/2, key_of/1, node_for/2,
+	next_node_for/3, node_preflist_for/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -175,6 +176,59 @@ node_for(RingId, Object) ->
 		KeyError ->
 			KeyError
 	end.
+
+next_node_for(RingId, NodeObject, Object) ->
+	NTab = nodes_table(RingId),
+	N = ets:select_count(NTab, [{'_', [], [true]}]),
+	Preflist = node_preflist_for(RingId, N, Object),
+	{ok, first_node_after(NodeObject, Preflist, Preflist)}.
+
+%% @private
+first_node_after(NodeObject, [], [NodeObject]) ->
+	NodeObject;
+first_node_after(_NodeObject, [], [FirstObject | _Preflist]) ->
+	FirstObject;
+first_node_after(NodeObject, [NodeObject, NextObject | _Rest], _Preflist) ->
+	NextObject;
+first_node_after(NodeObject, [_ | Rest], Preflist) ->
+	first_node_after(NodeObject, Rest, Preflist).
+
+node_preflist_for(RingId, N, Object) ->
+	case key_for(RingId, Object) of
+		{ok, Key} ->
+			PTab = ptrs_table(RingId),
+			Ptrs = ets:match_object(PTab, '_'),
+			FoldFun = fun
+				(?RYNG_PTR{index=Index, object=NodeObject}, {Bigger, Smaller}) when Index >= Key ->
+					case lists:member(NodeObject, Bigger) of
+						false ->
+							{[NodeObject | Bigger], Smaller};
+						true ->
+							{Bigger, Smaller}
+					end;
+				(?RYNG_PTR{object=NodeObject}, {Bigger, Smaller}) ->
+					case lists:member(NodeObject, Smaller) of
+						false ->
+							{Bigger, [NodeObject | Smaller]};
+						true ->
+							{Bigger, Smaller}
+					end
+			end,
+			{Bigger, Smaller} = lists:foldl(FoldFun, {[], []}, Ptrs),
+			build_node_preflist(N, lists:reverse(Bigger), lists:reverse(Smaller), []);
+		KeyError ->
+			KeyError
+	end.
+
+%% @private
+build_node_preflist(0, _Bigger, _Smaller, Preflist) ->
+	lists:reverse(Preflist);
+build_node_preflist(_N, [], [], Preflist) ->
+	lists:reverse(Preflist);
+build_node_preflist(N, [], [NodeObject | Smaller], Preflist) ->
+	build_node_preflist(N - 1, [], Smaller, [NodeObject | Preflist]);
+build_node_preflist(N, [NodeObject | Bigger], Smaller, Preflist) ->
+	build_node_preflist(N - 1, Bigger, Smaller, [NodeObject | Preflist]).
 
 %%%===================================================================
 %%% gen_server callbacks

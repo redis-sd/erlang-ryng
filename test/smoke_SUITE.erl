@@ -110,6 +110,12 @@ smoke(Config) ->
 	true = C0 >= 0.32 andalso C0 < 0.34,
 	true = C1 >= 0.32 andalso C1 < 0.34,
 	true = C2 >= 0.32 andalso C2 < 0.34,
+	Object = erlang:make_ref(),
+	[NA, NB, NC] = ryng:node_preflist_for(Ring, 3, Object),
+	{ok, NA} = ryng:node_for(Ring, Object),
+	{ok, NB} = ryng:next_node_for(Ring, NA, Object),
+	{ok, NC} = ryng:next_node_for(Ring, NB, Object),
+	{ok, NA} = ryng:next_node_for(Ring, NC, Object),
 	ok.
 
 %%--------------------------------------------------------------------

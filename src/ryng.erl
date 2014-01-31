@@ -37,7 +37,7 @@
 
 %% Object API
 -export([balance_check/2, balance_summary/1, hash_for/2, index_for/2,
-	key_for/2, key_of/1, node_for/2]).
+	key_for/2, key_of/1, node_for/2, next_node_for/3, node_preflist_for/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -328,20 +328,26 @@ balance_summary_nodes([?RYNG_NODE{object=Object, priority=Priority, weight=Weigh
 	end, {Weight + 1, [{Object, Weight + 1}]}, Balance),
 	balance_summary_nodes(Nodes, Balance2).
 
-hash_for(RingName, Binary) when is_binary(Binary) ->
-	ryng_ring:hash_for(RingName, Binary).
+hash_for(RingId, Binary) when is_binary(Binary) ->
+	ryng_ring:hash_for(RingId, Binary).
 
-index_for(RingName, Binary) when is_binary(Binary) ->
-	ryng_ring:index_for(RingName, Binary).
+index_for(RingId, Binary) when is_binary(Binary) ->
+	ryng_ring:index_for(RingId, Binary).
 
-key_for(RingName, Object) ->
-	ryng_ring:key_for(RingName, Object).
+key_for(RingId, Object) ->
+	ryng_ring:key_for(RingId, Object).
 
 key_of(Object) ->
 	ryng_ring:key_of(Object).
 
-node_for(RingName, Object) ->
-	ryng_ring:node_for(RingName, Object).
+node_for(RingId, Object) ->
+	ryng_ring:node_for(RingId, Object).
+
+next_node_for(RingId, NodeObject, Object) ->
+	ryng_ring:next_node_for(RingId, NodeObject, Object).
+
+node_preflist_for(RingId, N, Object) ->
+	ryng_ring:node_preflist_for(RingId, N, Object).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -403,8 +409,8 @@ handle_info({'DOWN', MonitorRef, process, Pid, _}, State=#state{monitors=Monitor
 	true = ets:delete(?TAB_RINGS, Ref),
 	Monitors2 = lists:keydelete({MonitorRef, Pid}, 1, Monitors),
 	{noreply, State#state{monitors=Monitors2}};
-handle_info({'$ryng', {ring, del, RingName}}, State) ->
-	ok = ryng:delete_ring(RingName),
+handle_info({'$ryng', {ring, del, RingId}}, State) ->
+	ok = ryng:delete_ring(RingId),
 	{noreply, State};
 handle_info({'$ryng', _Event}, State) ->
 	{noreply, State};
