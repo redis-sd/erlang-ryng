@@ -289,16 +289,12 @@ set_node(RingId, NodeObject, NodeWeight, NodePriority) ->
 %%% Object API functions
 %%%===================================================================
 
-balance_check(RingId, Iterations) when is_integer(Iterations) andalso Iterations > 0 ->
+balance_check(RingId, Iterations) ->
 	case node_for(RingId, 0) of
 		{ok, _} ->
 			Start = erlang:now(),
-			Results = [begin
-				{ok, NodeObject} = node_for(RingId, Iteration),
-				NodeObject
-			end || Iteration <- lists:seq(1, Iterations)],
+			Balance = balance_check(RingId, Iterations, orddict:new()),
 			Stop = erlang:now(),
-			Balance = balance_count(Results),
 			BalanceAverage = [{NodeObject, Count, Count / Iterations} || {NodeObject, Count} <- Balance],
 			TimeTotal = timer:now_diff(Stop, Start),
 			TimeAverage = TimeTotal / Iterations,
@@ -432,14 +428,11 @@ code_change(_OldVsn, State, _Extra) ->
 %%%-------------------------------------------------------------------
 
 %% @private
-balance_count(Results) when is_list(Results) ->
-	balance_count(Results, dict:new()).
-
-%% @private
-balance_count([], Balance) ->
-	dict:to_list(Balance);
-balance_count([NodeObject | NodeObjects], Balance) ->
-	balance_count(NodeObjects, dict:update_counter(NodeObject, 1, Balance)).
+balance_check(_RingId, 0, Balance) ->
+	Balance;
+balance_check(RingId, Iteration, Balance) ->
+	{ok, NodeObject} = node_for(RingId, Iteration),
+	balance_check(RingId, Iteration - 1, orddict:update_counter(NodeObject, 1, Balance)).
 
 %% @private
 hasher(Algorithm) when is_atom(Algorithm) ->

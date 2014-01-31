@@ -47,7 +47,7 @@ ok
      {0,node1,0.6666666666666666},
      {1,node2,1.0}]}
 12> ryng:balance_check(my_ring, 1000000).
-{ok,{1000000,2175268,2.175268},
+{ok,{1000000,2175268,1.331573},
     [{node0,333425,0.333425},{node1,666575,0.666575}]}
 13> ryng:del_node(my_ring, node1).
 ok
@@ -56,7 +56,7 @@ ok
 15> ryng:balance_summary(my_ring).
 {ok,[{0,node0,1.0},{1,node2,1.0}]}
 16> ryng:balance_check(my_ring, 1000000).
-{ok,{1000000,2782921,2.782921},[{node0,1000000,1.0}]}
+{ok,{1000000,2782921,1.130653},[{node0,1000000,1.0}]}
 17> ryng:del_node(my_ring, node0).
 ok
 18> ryng:sync_ring(my_ring).
@@ -64,7 +64,7 @@ ok
 19> ryng:balance_summary(my_ring).
 {ok,[{1,node2,1.0}]}
 20> ryng:balance_check(my_ring, 1000000).
-{ok,{1000000,1695015,1.695015},[{node2,1000000,1.0}]}
+{ok,{1000000,1695015,1.128125},[{node2,1000000,1.0}]}
 21> ryng:rm_ring(my_ring).
 ok
 22> ryng:list_rings().
