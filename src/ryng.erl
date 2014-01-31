@@ -289,7 +289,7 @@ set_node(RingId, NodeObject, NodeWeight, NodePriority) ->
 %%% Object API functions
 %%%===================================================================
 
-balance_check(RingId, Iterations) ->
+balance_check(RingId, Iterations) when is_integer(Iterations) andalso Iterations > 0 ->
 	case node_for(RingId, 0) of
 		{ok, _} ->
 			Start = erlang:now(),
